@@ -14,35 +14,14 @@
 #include "ExportDialog.h"
 #include "XcaWarning.h"
 #include <QAbstractItemView>
-#include <QActionGroup>
 #include <QMenu>
 
 void KeyTreeView::fillContextMenu(QMenu *menu, QMenu *subExport,
 			const QModelIndex &index, QModelIndexList indexes)
 {
-	QMenu *clipboard;
-	QAction *a;
 	bool multi = indexes.size() > 1;
-	QActionGroup *group = new QActionGroup(menu);
 
 	pki_key *key = db_base::fromIndex<pki_key>(index);
-	int exp_type = Settings["KeyFormat"];
-	const pki_export *x;
-
-	clipboard = menu->addMenu(tr("Clipboard format"));
-	foreach(x, pki_export::select(asym_key, 0)) {
-		if (!(x->flags & F_CLIPBOARD))
-			continue;
-		a = clipboard->addAction(x->desc);
-		a->setData(x->id);
-		a->setCheckable(true);
-		a->setChecked(exp_type == x->id);
-		group->addAction(a);
-	}
-
-	connect(group, SIGNAL(triggered(QAction*)),
-		this, SLOT(clipboardFormat(QAction*)));
-
 	if (indexes.size() == 0 || !key)
 		return;
 
@@ -209,11 +188,6 @@ void KeyTreeView::newItem(const QString &name)
 	delete dlg;
 }
 
-void KeyTreeView::clipboardFormat(QAction *a)
-{
-	Settings["KeyFormat"] = a->data().toInt();
-}
-
 void KeyTreeView::load(void)
 {
 	load_key l;
@@ -228,7 +202,9 @@ ExportDialog *KeyTreeView::exportDialog(const QModelIndexList &indexes)
 	return new ExportDialog(this,
 		tr("Key export"),
 		tr("Private Keys ( *.pem *.der *.pk8 );; "
-		   "SSH Public Keys ( *.pub )"), indexes,
+		   "SSH Public Keys ( *.pub )") + ";;" +
+		tr("SSH Private Keys ( *.priv )") + ";;" +
+		tr("Microsoft PVK Keys ( *.pvk )"), indexes,
 		QPixmap(key->isToken() ? ":scardImg" : ":keyImg"),
 		pki_export::select(asym_key, basemodel->exportFlags(indexes)),
 		"keyexport");

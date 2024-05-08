@@ -999,15 +999,15 @@ void NewX509::checkAuthInfAcc(const QString & text)
 	checkIcon(text, NID_info_access, authInfAccIco);
 }
 
-int NewX509::do_validateExtensions()
+enum NewX509::extension_error NewX509::do_validateExtensions()
 {
 	QString result;
-	int ret = 0;
+	extension_error ret;
 
 	if (!nconf_data->isReadOnly()) {
 		v3ext_backup = nconf_data->toPlainText();
 	}
-	ret = validateExtensions(v3ext_backup, result);
+	ret = validateExtensions(result);
 	nconf_data->document()->setHtml(result);
 	nconf_data->setReadOnly(true);
 	adv_validate->setText(tr("Edit"));
@@ -1023,14 +1023,14 @@ void NewX509::undo_validateExtensions()
 	adv_validate->setText(tr("Validate"));
 }
 
-int NewX509::validateExtensions(QString nconf, QString &result)
+enum NewX509::extension_error NewX509::validateExtensions(QString &result)
 {
-	int ret = 0, ext_count = 0;
+	enum extension_error ee = ee_none;
 	QStringList errors;
-	extList el, req_el;
+	extList el, el_all, req_el;
 	ign_openssl_error();
 	setupTmpCtx();
-	(void)nconf;
+
 	try {
 		el = getGuiExt();
 		if (!Settings["disable_netscape"])
@@ -1040,19 +1040,20 @@ int NewX509::validateExtensions(QString nconf, QString &result)
 		errors += err.getString();
 		el.clear();
 	}
-	ext_count += el.size();
 	if (el.size() > 0) {
 		result += "<h2><center>";
 		result += tr("Other Tabs") + "</center></h2><p>\n";
 		result += el.getHtml("<br>");
 	}
+	setupTmpCtx();
+	el_all += el;
 	try {
 		el = getAdvanced();
 	} catch (errorEx &err) {
 		errors += err.getString();
 		el.clear();
 	}
-	ext_count += el.size();
+	el_all += el;
 	if (el.size() > 0) {
 		if (!result.isEmpty())
 			result += "\n<hr>\n";
@@ -1067,9 +1068,10 @@ int NewX509::validateExtensions(QString nconf, QString &result)
 		result += tr("Errors") + "</center></h2><p><ul><li>\n";
 		result += errors.join("</li><li>\n");
 		result += "</li></ul>";
-		ret = 1;
+		ee = ee_invaldup;
 	}
 	el.clear();
+	setupTmpCtx();
 	if (fromReqCB->isChecked() && copyReqExtCB->isChecked()) {
 		req_el = getSelectedReq()->getV3ext();
 		for (int i=0; i<req_el.count(); i++) {
@@ -1077,7 +1079,7 @@ int NewX509::validateExtensions(QString nconf, QString &result)
 				el += req_el[i];
 		}
 	}
-	ext_count += el.size();
+	el_all += el;
 	if (el.size() > 0) {
 		if (!result.isEmpty())
 			result += "\n<hr>\n";
@@ -1085,12 +1087,14 @@ int NewX509::validateExtensions(QString nconf, QString &result)
 		result += tr("From PKCS#10 request") +"</center></h2><p>\n";
 		result += el.getHtml("<br>");
 	}
-	el = getExtDuplicates();
+	el = getExtDuplicates(el_all);
 	if (el.size() > 0) {
 		QString errtxt;
-		ret = 1;
-		errtxt = "<h2><center><font color=\"red\">Error:</font>"
-			"duplicate extensions:</center></h2><p><ul>\n";
+		ee = ee_invaldup;
+		errtxt = QString("<h2><center>"
+					"<font color=\"red\">%1:</font> %2:"
+				"</center></h2><p><ul>\n")
+			.arg(tr("Error")).arg(tr("duplicate extensions"));
 		for(int i = 0; i< el.size(); i++) {
 			errtxt += "<li>" +el[i].getObject() +"</li>\n";
 		}
@@ -1099,24 +1103,24 @@ int NewX509::validateExtensions(QString nconf, QString &result)
 	}
 	QString lineext;
 	if (!subAltName->text().isEmpty() && !getSubAltName().isValid())
-		lineext += "The Subject Alternative Name is invalid<br>\n";
+		lineext += tr("The Subject Alternative Name is invalid") + "<br>\n";
 	if (!issAltName->text().isEmpty() && !getIssAltName().isValid())
-		lineext += "The Issuer Alternative Name is invalid<br>\n";
+		lineext += tr("The Issuer Alternative Name is invalid") + "<br>\n";
 	if (!crlDist->text().isEmpty() && !getCrlDist().isValid())
-		lineext += "The CRL Distribution Point is invalid<br>\n";
+		lineext += tr("The CRL Distribution Point is invalid") + "<br>\n";
 	if (!authInfAcc->text().isEmpty() && !getAuthInfAcc().isValid())
-		lineext += "The Authority Information Access is invalid<br>\n";
+		lineext += tr("The Authority Information Access is invalid") + "<br>\n";
 	if (!lineext.isEmpty()) {
 		if (!result.isEmpty())
 			result += "\n<hr>\n";
 		result += lineext;
-		ret = 3;
+		ee = ee_inval;
 	}
-	if (ret == 0 && ext_count == 0 && pt == x509)
-		ret = 2;
+	if (ee == ee_none && el_all.size() == 0 && pt == x509)
+		ee = ee_empty;
 
 	ign_openssl_error();
-	return ret;
+	return ee;
 }
 
 void NewX509::on_editSubAlt_clicked()
@@ -1392,21 +1396,23 @@ void NewX509::accept()
 				break;
 		}
 	}
-	int r = do_validateExtensions();
-	if (r) {
+	enum extension_error ee = do_validateExtensions();
+	if (ee != ee_none) {
 		QString text;
-		switch (r) {
-		case 1:
+		switch (ee) {
+		case ee_invaldup:
 			text = tr("The certificate contains invalid or duplicate extensions. Check the validation on the advanced tab.");
 			gotoTab(5);
 			break;
-		case 2:
+		case ee_empty:
 			text = tr("The certificate contains no extensions. You may apply the extensions of one of the templates to define the purpose of the certificate.");
 			gotoTab(0);
 			break;
-		case 3:
+		case ee_inval:
 			text = tr("The certificate contains invalid extensions.");
 			gotoTab(2);
+			break;
+		case ee_none:
 			break;
 		}
 		xcaWarningBox msg(this, text);
